@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "paperless-docling"
+version = "0.1.0"
+description = "Docling parser plugin for Paperless-ngx"
+requires-python = ">=3.14,<3.15"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Peter van Liesdonk" },
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/pvliesdonk/paperless-docling"
+Issues = "https://github.com/pvliesdonk/paperless-docling/issues"
+
+[project.entry-points."paperless_ngx.parsers"]
+docling = "paperless_docling.parser:DoclingParser"
