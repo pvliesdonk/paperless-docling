@@ -14,3 +14,17 @@ def paperless_version_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "paperless", paperless)
     monkeypatch.setitem(sys.modules, "paperless.version", version_module)
     return version_module
+
+
+@pytest.fixture
+def paperless_parse_error(monkeypatch):
+    class ParseError(Exception):
+        pass
+
+    documents = ModuleType("documents")
+    documents.__path__ = []
+    parsers = ModuleType("documents.parsers")
+    parsers.__dict__["ParseError"] = ParseError
+    monkeypatch.setitem(sys.modules, "documents", documents)
+    monkeypatch.setitem(sys.modules, "documents.parsers", parsers)
+    return ParseError
