@@ -192,18 +192,13 @@ def test_parser_construction_rejects_ambiguous_compatibility_override(
     assert "must-not-leak" not in str(error.value)
 
 
-def test_unimplemented_collaborator_methods_fail_explicitly(
+def test_missing_conversion_collaborator_fails_selected_parse_clearly(
     paperless_version_module,
+    paperless_parse_error,
 ):
     with DoclingParser() as parser:
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(paperless_parse_error, match="conversion is unavailable"):
             parser.parse(Path("document.pdf"), "application/pdf")
-        with pytest.raises(NotImplementedError):
-            parser.get_thumbnail(Path("document.pdf"), "application/pdf")
-        with pytest.raises(NotImplementedError):
-            parser.get_page_count(Path("document.pdf"), "application/pdf")
-        with pytest.raises(NotImplementedError):
-            parser.extract_metadata(Path("document.pdf"), "application/pdf")
 
 
 @pytest.mark.parametrize("configured_version", [None, ""])
