@@ -10,99 +10,26 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, StrictInt
-from starlette.types import Receive, Scope, Send
 
+from ._webhook import WEBHOOK_PATH as _WEBHOOK_PATH
+from ._webhook import (
+    _credential_is_valid,
+    _is_json_content_type,
+    _parse_content_length,
+    _WebhookRequestMiddleware,
+)
 from .config import WorkerConfig
-from .credentials import is_valid_credential
 from .jobs import JobRepository
 from .metrics import WorkerMetrics
 
 logger = logging.getLogger(__name__)
 
-_WEBHOOK_PATH = "/v1/events/paperless"
-_AUTHORIZATION = b"authorization"
-_CONTENT_LENGTH = b"content-length"
-_CONTENT_TYPE = b"content-type"
-
-
-class _WebhookRequestMiddleware:
-    def __init__(self, app, *, max_bytes: int, webhook_token_digest: bytes) -> None:
-        self.app = app
-        self.max_bytes = max_bytes
-        self.webhook_token_digest = webhook_token_digest
-
-    async def __call__(self, scope, receive, send) -> None:
-        if (
-            scope["type"] != "http"
-            or scope.get("method") != "POST"
-            or scope.get("path") != _WEBHOOK_PATH
-        ):
-            await self.app(scope, receive, send)
-            return
-
-        headers = scope.get("headers", ())
-        credentials = [value for name, value in headers if name == _AUTHORIZATION]
-        if not _valid_credential(credentials, self.webhook_token_digest):
-            response = JSONResponse(
-                {"detail": "Unauthorized"},
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-            await response(scope, receive, send)
-            return
-
-        lengths = [value for name, value in headers if name == _CONTENT_LENGTH]
-        try:
-            parsed_lengths = [_parse_content_length(value) for value in lengths]
-        except ValueError:
-            await _json_error(scope, receive, send, 400, "Invalid Content-Length")
-            return
-        if parsed_lengths and len(set(parsed_lengths)) != 1:
-            await _json_error(scope, receive, send, 400, "Invalid Content-Length")
-            return
-        if parsed_lengths and parsed_lengths[0] > self.max_bytes:
-            await _json_error(scope, receive, send, 413, "Request body too large")
-            return
-
-        content_types = [value for name, value in headers if name == _CONTENT_TYPE]
-        if len(content_types) != 1 or not _is_json_content_type(content_types[0]):
-            await _json_error(
-                scope, receive, send, 415, "Content-Type must be application/json"
-            )
-            return
-
-        body_buffer = bytearray()
-        while True:
-            message = await receive()
-            if message["type"] != "http.request":
-                await _json_error(
-                    scope, receive, send, 400, "Invalid request body"
-                )
-                return
-            chunk = message.get("body", b"")
-            if len(body_buffer) + len(chunk) > self.max_bytes:
-                await _json_error(scope, receive, send, 413, "Request body too large")
-                return
-            body_buffer.extend(chunk)
-            if not message.get("more_body", False):
-                break
-
-        if parsed_lengths and len(body_buffer) != parsed_lengths[0]:
-            await _json_error(scope, receive, send, 400, "Invalid request body")
-            return
-
-        body = bytes(body_buffer)
-        del body_buffer
-        replayed = False
-
-        async def replay_receive():
-            nonlocal replayed
-            if replayed:
-                return {"type": "http.disconnect"}
-            replayed = True
-            return {"type": "http.request", "body": body, "more_body": False}
-
-        await self.app(scope, replay_receive, send)
+__all__ = [
+    "create_app",
+    "_WebhookRequestMiddleware",
+    "_is_json_content_type",
+    "_parse_content_length",
+]
 
 
 class _PaperlessEvent(BaseModel):
@@ -126,8 +53,16 @@ def create_app(
         webhook_token_digest=sha256(
             config.webhook_token.get_secret_value().encode("utf-8")
         ).digest(),
+        credential_validator=_valid_credential,
     )
+    _register_invalid_request_handler(app)
+    _register_enqueue_endpoint(app, jobs, metrics)
+    _register_health_endpoints(app, jobs, summary_field_readiness)
+    _register_metrics_endpoint(app, jobs, metrics)
+    return app
 
+
+def _register_invalid_request_handler(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def invalid_request(
         _request: Request, _error: RequestValidationError
@@ -137,10 +72,11 @@ def create_app(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
 
-    @app.post(
-        _WEBHOOK_PATH,
-        status_code=status.HTTP_202_ACCEPTED,
-    )
+
+def _register_enqueue_endpoint(
+    app: FastAPI, jobs: JobRepository, metrics: WorkerMetrics
+) -> None:
+    @app.post(_WEBHOOK_PATH, status_code=status.HTTP_202_ACCEPTED)
     def enqueue_event(event: _PaperlessEvent) -> dict[str, str]:
         try:
             jobs.enqueue(event.document_id, event.event)
@@ -161,28 +97,20 @@ def create_app(
         )
         return {"status": "accepted"}
 
+
+def _register_health_endpoints(
+    app: FastAPI,
+    jobs: JobRepository,
+    summary_field_readiness: Callable[[], bool] | None,
+) -> None:
     @app.get("/health/live")
     async def live() -> dict[str, str]:
         return {"status": "alive"}
 
     @app.get("/health/ready")
     def ready() -> JSONResponse:
-        database_status = "ready"
-        try:
-            jobs.check_ready()
-        except Exception:
-            database_status = "not_ready"
-
-        if summary_field_readiness is None:
-            summary_status = "not_checked"
-        else:
-            try:
-                summary_status = (
-                    "ready" if summary_field_readiness() is True else "not_ready"
-                )
-            except Exception:
-                summary_status = "not_ready"
-
+        database_status = _database_readiness(jobs)
+        summary_status = _summary_readiness(summary_field_readiness)
         is_ready = database_status == summary_status == "ready"
         return JSONResponse(
             {
@@ -195,6 +123,27 @@ def create_app(
             status_code=200 if is_ready else 503,
         )
 
+
+def _database_readiness(jobs: JobRepository) -> str:
+    try:
+        jobs.check_ready()
+    except Exception:
+        return "not_ready"
+    return "ready"
+
+
+def _summary_readiness(readiness: Callable[[], bool] | None) -> str:
+    if readiness is None:
+        return "not_checked"
+    try:
+        return "ready" if readiness() is True else "not_ready"
+    except Exception:
+        return "not_ready"
+
+
+def _register_metrics_endpoint(
+    app: FastAPI, jobs: JobRepository, metrics: WorkerMetrics
+) -> None:
     @app.get("/metrics")
     def prometheus_metrics() -> Response:
         try:
@@ -208,40 +157,10 @@ def create_app(
             )
         return Response(content=content, media_type=content_type)
 
-    return app
-
 
 def _tokens_match(received: bytes, expected: bytes) -> bool:
     return secrets.compare_digest(received, expected)
 
 
 def _valid_credential(credentials: list[bytes], expected_digest: bytes) -> bool:
-    prefix = b"Bearer "
-    syntax_valid = len(credentials) == 1 and credentials[0].startswith(prefix)
-    token = credentials[0][len(prefix) :] if syntax_valid else b""
-    syntax_valid = syntax_valid and is_valid_credential(token)
-    received_digest = sha256(token if syntax_valid else b"").digest()
-    matches = _tokens_match(received_digest, expected_digest)
-    return syntax_valid and matches
-
-
-def _parse_content_length(value: bytes) -> int:
-    if not value or not value.isdigit():
-        raise ValueError
-    return int(value)
-
-
-def _is_json_content_type(value: bytes) -> bool:
-    media_type = value.split(b";", 1)[0].strip().lower()
-    return media_type == b"application/json"
-
-
-async def _json_error(
-    scope: Scope,
-    receive: Receive,
-    send: Send,
-    status_code: int,
-    detail: str,
-) -> None:
-    response = JSONResponse({"detail": detail}, status_code=status_code)
-    await response(scope, receive, send)
+    return _credential_is_valid(credentials, expected_digest, _tokens_match)
