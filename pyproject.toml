@@ -6,6 +6,8 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+  "httpx2>=2.13.0",
+  "paperless-docling-worker",
   "pytest>=9",
   "ruff>=0.14",
 ]
@@ -16,8 +18,12 @@ package = false
 [tool.uv.workspace]
 members = ["packages/*"]
 
+[tool.uv.sources]
+paperless-docling-worker = { workspace = true }
+
 [tool.pytest.ini_options]
-pythonpath = ["packages/parser/src"]
+addopts = ["--import-mode=importlib"]
+pythonpath = ["packages/parser/src", "packages/worker/src"]
 testpaths = ["tests"]
 
 [tool.ruff]
