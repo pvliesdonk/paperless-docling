@@ -11,7 +11,7 @@ from paperless_docling.errors import IncompatiblePaperlessError
 PACKAGE_SRC = Path(__file__).parents[3] / "packages" / "parser" / "src"
 
 
-@pytest.mark.parametrize("running_version", ["3.1.0", "3.1.99"])
+@pytest.mark.parametrize("running_version", ["3.1.0", "3.1.99", "3.2.0", "3.3.0"])
 def test_accepts_supported_paperless_minor(monkeypatch, running_version):
     monkeypatch.setattr(compatibility, "paperless_version", lambda: running_version)
 
@@ -20,7 +20,7 @@ def test_accepts_supported_paperless_minor(monkeypatch, running_version):
 
 @pytest.mark.parametrize(
     "running_version",
-    ["3.0.99", "3.1.0rc1", "3.2.0rc1", "3.2.0"],
+    ["3.0.99", "3.1.0rc1", "3.2.0rc1", "3.4.0"],
 )
 def test_rejects_paperless_versions_outside_supported_minor(
     monkeypatch,
@@ -33,7 +33,7 @@ def test_rejects_paperless_versions_outside_supported_minor(
 
     message = str(error.value)
     assert running_version in message
-    assert ">=3.1,<3.2" in message
+    assert ">=3.1,<3.4" in message
     assert "paperless-docling 0.1.0" in message
 
 

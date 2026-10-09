@@ -12,7 +12,9 @@ license-files = ["LICENSE"]
 authors = [
   { name = "Peter van Liesdonk" },
 ]
-dependencies = []
+dependencies = [
+    "docling-slim[service-client]>=2.134.0",
+]
 
 [project.urls]
 Repository = "https://github.com/pvliesdonk/paperless-docling"

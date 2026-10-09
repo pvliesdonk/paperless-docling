@@ -8,6 +8,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlparse
 
+from docling.datamodel.base_models import InputFormat, OutputFormat
+from docling.datamodel.pipeline_options import ProcessingPipeline, TableFormerMode
+from docling_core.types.doc.base import ImageRefMode
+
 from paperless_docling.compatibility import allow_unsupported_paperless
 from paperless_docling.errors import ConfigurationError, IncompatiblePaperlessError
 
@@ -31,6 +35,30 @@ class PluginConfig:
     token_file: Path | None
     preset: str
     profile_version: str
+
+    from_formats: tuple[InputFormat, ...]
+    to_formats: tuple[OutputFormat, ...]
+    pipeline: ProcessingPipeline
+
+    ocr_preset: str
+    ocr_lang: tuple[str, ...]
+    do_ocr: bool
+    force_ocr: bool
+
+    include_images: bool
+    include_page_images: bool
+    images_scale: float
+
+    do_table_structure: bool
+    table_mode: TableFormerMode
+    table_cell_matching: bool
+
+    do_pdf_heading_hierarchy: bool
+
+    image_export_mode: ImageRefMode
+    md_page_break_placeholder: str
+    md_compact_tables: bool
+
     poll_interval: timedelta
     deadline: timedelta
     cache_dir: Path
@@ -49,6 +77,7 @@ class PluginConfig:
         environ: Mapping[str, str] = os.environ,
     ) -> PluginConfig:
         serve_url = _required(environ, "PAPERLESS_DOCLING_SERVE_URL")
+
         try:
             parsed_url = urlparse(serve_url)
             hostname = parsed_url.hostname
@@ -57,6 +86,7 @@ class PluginConfig:
             raise ConfigurationError(
                 "PAPERLESS_DOCLING_SERVE_URL must be a valid HTTP(S) URL.",
             ) from None
+
         if (
             parsed_url.scheme not in {"http", "https"}
             or not hostname
@@ -71,14 +101,108 @@ class PluginConfig:
             environ,
             "PAPERLESS_DOCLING_PROFILE_VERSION",
         )
+
         cache_dir = Path(_required(environ, "PAPERLESS_DOCLING_CACHE_DIR"))
-        _validate_cache_dir(cache_dir)
+        _validate_cache_dir(cache_dir, "PAPERLESS_DOCLING_CACHE_DIR")
 
         preset = environ.get("PAPERLESS_DOCLING_PRESET", DEFAULT_PRESET)
         if not preset.strip():
-            raise ConfigurationError("PAPERLESS_DOCLING_PRESET must be non-empty.")
+            raise ConfigurationError(
+                "PAPERLESS_DOCLING_PRESET must be non-empty.",
+            )
 
         token_file, token = _read_token(environ)
+
+        from_formats = _required_enum_list(
+            environ,
+            "PAPERLESS_DOCLING_FROM_FORMATS",
+            InputFormat,
+        )
+
+        to_formats = _required_enum_list(
+            environ,
+            "PAPERLESS_DOCLING_TO_FORMATS",
+            OutputFormat,
+        )
+
+        pipeline = _required_enum_value(
+            environ,
+            "PAPERLESS_DOCLING_PIPELINE",
+            ProcessingPipeline,
+        )
+
+        ocr_preset = _required(
+            environ,
+            "PAPERLESS_DOCLING_OCR_PRESET",
+        )
+
+        ocr_lang = _required_string_list(
+            environ,
+            "PAPERLESS_DOCLING_OCR_LANG",
+        )
+
+        do_ocr = _required_boolean(
+            environ,
+            "PAPERLESS_DOCLING_DO_OCR",
+        )
+
+        force_ocr = _required_boolean(
+            environ,
+            "PAPERLESS_DOCLING_FORCE_OCR",
+        )
+
+        include_images = _required_boolean(
+            environ,
+            "PAPERLESS_DOCLING_INCLUDE_IMAGES",
+        )
+
+        include_page_images = _required_boolean(
+            environ,
+            "PAPERLESS_DOCLING_INCLUDE_PAGE_IMAGES",
+        )
+
+        images_scale = _required_positive_float(
+            environ,
+            "PAPERLESS_DOCLING_IMAGES_SCALE",
+        )
+
+        do_table_structure = _required_boolean(
+            environ,
+            "PAPERLESS_DOCLING_DO_TABLE_STRUCTURE",
+        )
+
+        table_mode = _required_enum_value(
+            environ,
+            "PAPERLESS_DOCLING_TABLE_MODE",
+            TableFormerMode,
+        )
+
+        table_cell_matching = _required_boolean(
+            environ,
+            "PAPERLESS_DOCLING_TABLE_CELL_MATCHING",
+        )
+
+        do_pdf_heading_hierarchy = _required_boolean(
+            environ,
+            "PAPERLESS_DOCLING_DO_PDF_HEADING_HIERARCHY",
+        )
+
+        image_export_mode = _required_enum_value(
+            environ,
+            "PAPERLESS_DOCLING_IMAGE_EXPORT_MODE",
+            ImageRefMode,
+        )
+
+        md_page_break_placeholder = _required_exact(
+            environ,
+            "PAPERLESS_DOCLING_MD_PAGE_BREAK_PLACEHOLDER",
+        )
+
+        md_compact_tables = _required_boolean(
+            environ,
+            "PAPERLESS_DOCLING_MD_COMPACT_TABLES",
+        )
+
         poll_interval = _duration(
             environ,
             "PAPERLESS_DOCLING_POLL_INTERVAL_SECONDS",
@@ -86,6 +210,7 @@ class PluginConfig:
             maximum=MAX_POLL_INTERVAL,
             unit="seconds",
         )
+
         deadline = _duration(
             environ,
             "PAPERLESS_DOCLING_DEADLINE_SECONDS",
@@ -93,6 +218,7 @@ class PluginConfig:
             maximum=MAX_DEADLINE,
             unit="seconds",
         )
+
         cache_max_age = _duration(
             environ,
             "PAPERLESS_DOCLING_CACHE_MAX_AGE_DAYS",
@@ -100,6 +226,7 @@ class PluginConfig:
             maximum=MAX_CACHE_MAX_AGE,
             unit="days",
         )
+
         cache_max_bytes = _positive_integer(
             environ,
             "PAPERLESS_DOCLING_CACHE_MAX_BYTES",
@@ -117,6 +244,23 @@ class PluginConfig:
             token_file=token_file,
             preset=preset,
             profile_version=profile_version,
+            from_formats=from_formats,
+            to_formats=to_formats,
+            pipeline=pipeline,
+            ocr_preset=ocr_preset,
+            ocr_lang=ocr_lang,
+            do_ocr=do_ocr,
+            force_ocr=force_ocr,
+            include_images=include_images,
+            include_page_images=include_page_images,
+            images_scale=images_scale,
+            do_table_structure=do_table_structure,
+            table_mode=table_mode,
+            table_cell_matching=table_cell_matching,
+            do_pdf_heading_hierarchy=do_pdf_heading_hierarchy,
+            image_export_mode=image_export_mode,
+            md_page_break_placeholder=md_page_break_placeholder,
+            md_compact_tables=md_compact_tables,
             poll_interval=poll_interval,
             deadline=deadline,
             cache_dir=cache_dir,
@@ -134,12 +278,108 @@ def _required(environ: Mapping[str, str], variable: str) -> str:
     return value
 
 
+def _required_exact(environ: Mapping[str, str], variable: str) -> str:
+    if variable not in environ:
+        raise ConfigurationError(f"{variable} must be defined.")
+    return environ[variable]
+
+
+def _required_string_list(
+    environ: Mapping[str, str],
+    variable: str,
+) -> tuple[str, ...]:
+    value = _required(environ, variable)
+    items = tuple(item.strip() for item in value.split(",") if item.strip())
+
+    if not items:
+        raise ConfigurationError(
+            f"{variable} must contain at least one value.",
+        )
+
+    return items
+
+
+def _required_enum_list(
+    environ: Mapping[str, str],
+    variable: str,
+    enum_type: type,
+) -> tuple:
+    names = _required_string_list(environ, variable)
+
+    valid = {member.value: member for member in enum_type}
+    result = []
+
+    for name in names:
+        member = valid.get(name)
+        if member is None:
+            allowed = ", ".join(sorted(valid))
+            raise ConfigurationError(
+                f"{variable} contains invalid value {name!r}. "
+                f"Allowed values: {allowed}.",
+            )
+        result.append(member)
+
+    return tuple(result)
+
+
+def _required_enum_value(
+    environ: Mapping[str, str],
+    variable: str,
+    enum_type: type,
+):
+    value = _required(environ, variable)
+
+    valid = {member.value: member for member in enum_type}
+    member = valid.get(value)
+
+    if member is None:
+        allowed = ", ".join(sorted(valid))
+        raise ConfigurationError(
+            f"{variable} contains invalid value {value!r}. "
+            f"Allowed values: {allowed}.",
+        )
+
+    return member
+
+
+def _required_boolean(
+    environ: Mapping[str, str],
+    variable: str,
+) -> bool:
+    value = _required(environ, variable).lower()
+
+    if value in {"true", "1", "yes", "on"}:
+        return True
+
+    if value in {"false", "0", "no", "off"}:
+        return False
+
+    raise ConfigurationError(
+        f"{variable} must be a boolean.",
+    )
+
+
+def _required_positive_float(
+    environ: Mapping[str, str],
+    variable: str,
+) -> float:
+    number = _decimal(_required(environ, variable), variable)
+
+    if number <= 0:
+        raise ConfigurationError(
+            f"{variable} must be positive.",
+        )
+
+    return float(number)
+
+
 def _read_token(environ: Mapping[str, str]) -> tuple[Path | None, str | None]:
     value = environ.get("PAPERLESS_DOCLING_SERVE_TOKEN_FILE")
     if value is None:
         return None, None
 
     token_file = Path(value)
+
     try:
         if not token_file.is_file():
             raise OSError
@@ -151,6 +391,7 @@ def _read_token(environ: Mapping[str, str]) -> tuple[Path | None, str | None]:
 
     if token.endswith("\n"):
         token = token[:-1]
+
     return token_file, token
 
 
@@ -168,14 +409,22 @@ def _duration(
 
     number = _decimal(value, variable)
     maximum_value = Decimal(str(maximum.total_seconds()))
+
     if unit == "days":
         maximum_value /= Decimal(86_400)
+
     if number <= 0 or number > maximum_value:
-        raise ConfigurationError(f"{variable} must be positive and within its limit.")
+        raise ConfigurationError(
+            f"{variable} must be positive and within its limit.",
+        )
 
     duration = timedelta(**{unit: float(number)})
+
     if duration <= timedelta(0):
-        raise ConfigurationError(f"{variable} must resolve to a positive duration.")
+        raise ConfigurationError(
+            f"{variable} must resolve to a positive duration.",
+        )
+
     return duration
 
 
@@ -191,10 +440,16 @@ def _positive_integer(
         return default
 
     number = _decimal(value, variable)
-    if number != number.to_integral_value() or number <= 0 or number > maximum:
+
+    if (
+        number != number.to_integral_value()
+        or number <= 0
+        or number > maximum
+    ):
         raise ConfigurationError(
             f"{variable} must be a positive integer within its limit.",
         )
+
     return int(number)
 
 
@@ -202,17 +457,29 @@ def _decimal(value: str, variable: str) -> Decimal:
     try:
         number = Decimal(value)
     except InvalidOperation as error:
-        raise ConfigurationError(f"{variable} must be numeric.") from error
+        raise ConfigurationError(
+            f"{variable} must be numeric.",
+        ) from error
+
     if not number.is_finite():
-        raise ConfigurationError(f"{variable} must be numeric.")
+        raise ConfigurationError(
+            f"{variable} must be numeric.",
+        )
+
     return number
 
 
-def _validate_cache_dir(cache_dir: Path) -> None:
+def _validate_cache_dir(
+    cache_dir: Path,
+    env_name: str = "PAPERLESS_DOCLING_CACHE_DIR",
+) -> None:
     if not cache_dir.is_absolute():
-        raise ConfigurationError("PAPERLESS_DOCLING_CACHE_DIR must be absolute.")
+        raise ConfigurationError(
+            f"{env_name} must be absolute.",
+        )
 
     writable_location = cache_dir
+
     while True:
         try:
             writable_location.lstat()
@@ -221,19 +488,26 @@ def _validate_cache_dir(cache_dir: Path) -> None:
             continue
         except OSError as error:
             raise ConfigurationError(
-                "PAPERLESS_DOCLING_CACHE_DIR must have directory ancestors.",
+                f"{env_name} must have directory ancestors.",
             ) from error
         break
 
     if not writable_location.is_dir():
         raise ConfigurationError(
-            "PAPERLESS_DOCLING_CACHE_DIR must have directory ancestors.",
+            f"{env_name} must have directory ancestors.",
         )
 
     access_options = (
-        {"effective_ids": True} if _ACCESS_SUPPORTS_EFFECTIVE_IDS else {}
+        {"effective_ids": True}
+        if _ACCESS_SUPPORTS_EFFECTIVE_IDS
+        else {}
     )
-    if not os.access(writable_location, os.W_OK | os.X_OK, **access_options):
+
+    if not os.access(
+        writable_location,
+        os.W_OK | os.X_OK,
+        **access_options,
+    ):
         raise ConfigurationError(
-            "PAPERLESS_DOCLING_CACHE_DIR must be writable.",
+            f"{env_name} must be writable.",
         )

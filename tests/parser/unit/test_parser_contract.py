@@ -2,8 +2,10 @@ import inspect
 import os
 import subprocess
 import sys
+import types
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from paperless_docling.errors import IncompatiblePaperlessError
@@ -11,13 +13,27 @@ from paperless_docling.parser import DoclingParser
 
 EXPECTED_MIME_TYPES = {
     "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-excel": ".xls",
+    "application/rtf": ".rtf",
+    "application/vnd.oasis.opendocument.text": ".odt",
+    "application/vnd.oasis.opendocument.spreadsheet": ".ods",
+    "application/vnd.oasis.opendocument.presentation": ".odp",
+    "text/html": ".html",
+    "application/xhtml+xml": ".html",
+    "application/x-mimearchive": ".mhtml",
+    "multipart/related": ".mhtml",
+    "text/csv": ".csv",
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/tiff": ".tif",
     "image/gif": ".gif",
     "image/bmp": ".bmp",
     "image/webp": ".webp",
-    "image/heic": ".heic",
 }
 PROJECT_ROOT = Path(__file__).parents[3]
 INSTALL_SCRIPT = PROJECT_ROOT / "scripts" / "install-parser.sh"
@@ -76,11 +92,39 @@ EXPECTED_PROTOCOL_SIGNATURES = {
 }
 
 
+@pytest.fixture(autouse=True)
+def configured_parser_environment(monkeypatch, tmp_path):
+    values = {
+        "PAPERLESS_DOCLING_SERVE_URL": "https://docling.example.test",
+        "PAPERLESS_DOCLING_PROFILE_VERSION": "profile-v1",
+        "PAPERLESS_DOCLING_CACHE_DIR": str(tmp_path / "cache"),
+        "PAPERLESS_DOCLING_FROM_FORMATS": "pdf",
+        "PAPERLESS_DOCLING_TO_FORMATS": "md",
+        "PAPERLESS_DOCLING_PIPELINE": "standard",
+        "PAPERLESS_DOCLING_OCR_PRESET": "paperless-vlm",
+        "PAPERLESS_DOCLING_OCR_LANG": "eng",
+        "PAPERLESS_DOCLING_DO_OCR": "true",
+        "PAPERLESS_DOCLING_FORCE_OCR": "false",
+        "PAPERLESS_DOCLING_INCLUDE_IMAGES": "false",
+        "PAPERLESS_DOCLING_INCLUDE_PAGE_IMAGES": "false",
+        "PAPERLESS_DOCLING_IMAGES_SCALE": "1.0",
+        "PAPERLESS_DOCLING_DO_TABLE_STRUCTURE": "true",
+        "PAPERLESS_DOCLING_TABLE_MODE": "accurate",
+        "PAPERLESS_DOCLING_TABLE_CELL_MATCHING": "true",
+        "PAPERLESS_DOCLING_DO_PDF_HEADING_HIERARCHY": "false",
+        "PAPERLESS_DOCLING_IMAGE_EXPORT_MODE": "placeholder",
+        "PAPERLESS_DOCLING_MD_PAGE_BREAK_PLACEHOLDER": "",
+        "PAPERLESS_DOCLING_MD_COMPACT_TABLES": "false",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+
 def test_parser_exposes_registry_identity():
     assert DoclingParser.name == "Paperless Docling Parser"
     assert DoclingParser.version == "0.1.0"
     assert DoclingParser.author
-    assert DoclingParser.url == "https://github.com/pvliesdonk/paperless-docling"
+    assert DoclingParser.url == "https://github.com/lockdlock/paperless-docling"
     assert DoclingParser.uses_remote_service is True
 
 
@@ -138,8 +182,38 @@ def test_parser_matches_paperless_3_1_call_signatures():
     )
 
 
+@pytest.fixture
+def paperless_runtime_fakes(monkeypatch, tmp_path):
+    django_module = types.ModuleType("django")
+    django_conf_module = types.ModuleType("django.conf")
+    django_conf_module.settings = SimpleNamespace(
+        SCRATCH_DIR=tmp_path / "scratch",
+        TIKA_GOTENBERG_ENDPOINT="http://gotenberg.example.test",
+        CELERY_TASK_TIME_LIMIT=300,
+    )
+    django_module.conf = django_conf_module
+    monkeypatch.setitem(sys.modules, "django", django_module)
+    monkeypatch.setitem(sys.modules, "django.conf", django_conf_module)
+
+    gotenberg_module = types.ModuleType("gotenberg_client")
+
+    class FakeGotenbergClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return None
+
+    gotenberg_module.GotenbergClient = FakeGotenbergClient
+    monkeypatch.setitem(sys.modules, "gotenberg_client", gotenberg_module)
+
+
 def test_parser_context_removes_temporary_directory_after_exception(
     paperless_version_module,
+    paperless_runtime_fakes,
 ):
     tempdir = None
 
@@ -157,16 +231,17 @@ def test_parser_construction_checks_paperless_compatibility(
     monkeypatch,
     paperless_version_module,
 ):
-    monkeypatch.setattr(paperless_version_module, "__version__", (3, 2, 0))
+    monkeypatch.setattr(paperless_version_module, "__version__", (3, 0, 0))
     monkeypatch.setenv("PAPERLESS_DOCLING_ALLOW_UNSUPPORTED_PAPERLESS", "false")
 
-    with pytest.raises(IncompatiblePaperlessError, match="3.2.0"):
+    with pytest.raises(IncompatiblePaperlessError, match="3.0.0"):
         DoclingParser()
 
 
 def test_parser_construction_honors_explicit_compatibility_override(
     monkeypatch,
     paperless_version_module,
+    paperless_runtime_fakes,
 ):
     monkeypatch.setattr(paperless_version_module, "__version__", (3, 2, 0))
     monkeypatch.setenv("PAPERLESS_DOCLING_ALLOW_UNSUPPORTED_PAPERLESS", "true")
@@ -192,18 +267,9 @@ def test_parser_construction_rejects_ambiguous_compatibility_override(
     assert "must-not-leak" not in str(error.value)
 
 
-def test_unimplemented_collaborator_methods_fail_explicitly(
-    paperless_version_module,
-):
-    with DoclingParser() as parser:
-        with pytest.raises(NotImplementedError):
-            parser.parse(Path("document.pdf"), "application/pdf")
-        with pytest.raises(NotImplementedError):
-            parser.get_thumbnail(Path("document.pdf"), "application/pdf")
-        with pytest.raises(NotImplementedError):
-            parser.get_page_count(Path("document.pdf"), "application/pdf")
-        with pytest.raises(NotImplementedError):
-            parser.extract_metadata(Path("document.pdf"), "application/pdf")
+def test_parser_implements_paperless_collaborator_methods():
+    for name in ("parse", "get_thumbnail", "get_page_count", "extract_metadata"):
+        assert callable(getattr(DoclingParser, name))
 
 
 @pytest.mark.parametrize("configured_version", [None, ""])

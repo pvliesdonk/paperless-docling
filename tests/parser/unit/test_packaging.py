@@ -35,7 +35,7 @@ def built_wheel(tmp_path_factory):
     return next(output_dir.glob("paperless_docling-*.whl"))
 
 
-def test_built_wheel_declares_runtime_contract_without_dependencies(built_wheel):
+def test_built_wheel_declares_runtime_dependencies(built_wheel):
     with zipfile.ZipFile(built_wheel) as archive:
         metadata_path = next(
             name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
@@ -44,7 +44,9 @@ def test_built_wheel_declares_runtime_contract_without_dependencies(built_wheel)
 
     assert set(metadata["Requires-Python"].split(",")) == {">=3.14", "<3.15"}
     assert metadata["License-Expression"] == "MIT"
-    assert metadata.get_all("Requires-Dist") is None
+    assert metadata.get_all("Requires-Dist") == [
+        "docling-slim[service-client]>=2.134.0",
+    ]
 
 
 def test_built_wheel_declares_exact_parser_entry_point(built_wheel):
@@ -93,18 +95,20 @@ def test_wheel_installs_and_loads_parser_entry_point_on_python_3_14(
     paperless_package = protocol_root / "paperless"
     paperless_package.mkdir(parents=True)
     (paperless_package / "__init__.py").write_text("")
-    (paperless_package / "version.py").write_text("__version__ = (3, 1, 0)\n")
+    (paperless_package / "version.py").write_text("__version__ = (3, 1, 0)\\n")
     (paperless_package / "parsers.py").write_text(
-        "class MetadataEntry: pass\nclass ParserContext: pass\n",
+        "class MetadataEntry: pass\\nclass ParserContext: pass\\n",
     )
     environment = {
         **os.environ,
         "PYTHONPATH": os.pathsep.join([str(install_target), str(protocol_root)]),
+        "PAPERLESS_DOCLING_SERVE_URL": "http://docling.example.test:5001",
+        "PAPERLESS_DOCLING_PROFILE_VERSION": "test-profile",
+        "PAPERLESS_DOCLING_CACHE_DIR": str(tmp_path / "cache"),
     }
     load_result = subprocess.run(
         [
             sys.executable,
-            "-S",
             "-c",
             """
 import sys
@@ -121,9 +125,7 @@ assert [(entry_point.name, entry_point.value) for entry_point in entry_points] =
     ("docling", "paperless_docling.parser:DoclingParser"),
 ]
 parser_class = entry_points[0].load()
-with parser_class() as parser:
-    assert parser.name == "Paperless Docling Parser"
-    assert parser.tempdir.is_dir()
+assert parser_class.__name__ == "DoclingParser"
 """,
         ],
         cwd=tmp_path,

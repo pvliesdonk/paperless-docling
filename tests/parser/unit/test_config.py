@@ -14,6 +14,23 @@ def valid_env(tmp_path: Path, **overrides: str) -> dict[str, str]:
         "PAPERLESS_DOCLING_SERVE_URL": "https://docling.example.test",
         "PAPERLESS_DOCLING_PROFILE_VERSION": "profile-v1",
         "PAPERLESS_DOCLING_CACHE_DIR": str(tmp_path / "cache"),
+        "PAPERLESS_DOCLING_FROM_FORMATS": "pdf",
+        "PAPERLESS_DOCLING_TO_FORMATS": "md",
+        "PAPERLESS_DOCLING_PIPELINE": "standard",
+        "PAPERLESS_DOCLING_OCR_PRESET": "paperless-vlm",
+        "PAPERLESS_DOCLING_OCR_LANG": "eng",
+        "PAPERLESS_DOCLING_DO_OCR": "true",
+        "PAPERLESS_DOCLING_FORCE_OCR": "false",
+        "PAPERLESS_DOCLING_INCLUDE_IMAGES": "false",
+        "PAPERLESS_DOCLING_INCLUDE_PAGE_IMAGES": "false",
+        "PAPERLESS_DOCLING_IMAGES_SCALE": "1.0",
+        "PAPERLESS_DOCLING_DO_TABLE_STRUCTURE": "true",
+        "PAPERLESS_DOCLING_TABLE_MODE": "accurate",
+        "PAPERLESS_DOCLING_TABLE_CELL_MATCHING": "true",
+        "PAPERLESS_DOCLING_DO_PDF_HEADING_HIERARCHY": "false",
+        "PAPERLESS_DOCLING_IMAGE_EXPORT_MODE": "placeholder",
+        "PAPERLESS_DOCLING_MD_PAGE_BREAK_PLACEHOLDER": "",
+        "PAPERLESS_DOCLING_MD_COMPACT_TABLES": "false",
     }
     environment.update(overrides)
     return environment

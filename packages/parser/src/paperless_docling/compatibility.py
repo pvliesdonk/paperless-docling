@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from paperless_docling import __version__
 from paperless_docling.errors import IncompatiblePaperlessError
 
-SUPPORTED_PAPERLESS_RANGE = ">=3.1,<3.2"
+SUPPORTED_PAPERLESS_RANGE = ">=3.1,<3.4"
 ALLOW_UNSUPPORTED_VARIABLE = "PAPERLESS_DOCLING_ALLOW_UNSUPPORTED_PAPERLESS"
 
 
@@ -44,7 +44,7 @@ def ensure_paperless_compatible(*, allow_unsupported: bool) -> None:
 
     running_version = paperless_version()
     release = _release_components(running_version)
-    is_supported = release is not None and release[:2] == (3, 1)
+    is_supported = release is not None and release[:2] in {(3, 1), (3, 2), (3, 3)}
 
     if is_supported:
         return
